@@ -1,0 +1,6 @@
+Model                = SSH1c
+Method               = mfebr
+
+System               = htcondor
+Cpus                 = 100
+pylocation           = /home/arkajitmandal/py3.tar.gz
