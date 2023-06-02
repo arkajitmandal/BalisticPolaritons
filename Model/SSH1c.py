@@ -6,7 +6,7 @@ from scipy.sparse import csr_matrix
 class parameters():
    amu, ps, cm, Å =  1836.0, 41341.37, 1/0.000004556, 1.8897259885789
    c, π = 137.0, np.pi
-   dtN = 600
+   dtN = 100
    NSteps = 4200*3//dtN #int(2*10**6)
    NTraj  = 1
    
@@ -20,23 +20,25 @@ class parameters():
    nskip = 1
    #------------------  
    β  = 1052.8 # Temp
-   αm, βm = 995 /(cm * Å) , 3500/(cm * Å)
-   τ  = 300/cm     
+   αm, βm = 1500 /(cm * Å) , 5000/(cm * Å)
+   τ  = 100/cm     
    K  = 14500.0 * (amu/ps**2)
    #-------------------
    dL   = 100 * Å
    L    = nsites * dL
-   ωc0 = 2.5/27.2114 
+   ωc0 = 1.65/27.2114 
    kx  = ωc0/c
    j =  (np.arange(nmodes)) #- (nmodes-1)/2 
    kz  =   2 * π * (j-nmodes//2)/L  #
    #kz  =  π * (j + 1)/ (nsites * L)  
    ωc  = ( ωc0**2 + (kz * c)**2 )**0.5
-   Ex = 3.0/27.2114
-   Δωc = ωc0 - Ex
-   gc  = 0.1/27.2114/(nsites**0.5)
-   Γc  = 0.01/27.2114
-
+   Δωc = 0.2/27.2114
+   Ex = ωc0 + Δωc
+   
+   gc  = 0.15/27.2114/(nsites**0.5)
+   
+   E0 = -0.25/27.2114 # relative to the exciton branch Ex 
+   dE = 0.05/27.2114
 
 def Hel(R):
     αm  = parameters.αm 

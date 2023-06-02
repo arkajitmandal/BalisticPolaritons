@@ -144,7 +144,7 @@ def VelVer(dat) :
     # half electronic evolution
     for t in range(int(np.floor(EStep/2))):
         ci = propagateCi(ci, Vij, dtE)  
-    ci[par.nsites:] = ci[par.nsites:] * np.exp(- par.Γc * par.dtN/4.0)
+    ci /= np.sum(ci.conjugate()*ci) 
     dat.ci = ci * 1.0 
 
     # ======= Nuclear Block ==================================
@@ -164,7 +164,7 @@ def VelVer(dat) :
     # half electronic evolution
     for t in range(int(np.ceil(EStep/2))):
         ci = propagateCi(ci, Vij, dtE)  
-    ci[par.nsites:] = ci[par.nsites:] * np.exp(-par.Γc * par.dtN/4.0)
+    ci /= np.sum(ci.conjugate()*ci)  
     dat.ci = ci * 1.0 
 
     return dat
@@ -211,6 +211,96 @@ def dX(psi):
         dX[i] = np.sum(psiR*psiR.conjugate() * R**2) - np.sum(psiR * psiR.conjugate() * R) **2
     return np.min(dX)
 
+
+def Ctheory(parameters):
+    wk = parameters.ωc
+    gc = parameters.gc * np.sqrt(parameters.nsites) 
+    kz = parameters.kz 
+ 
+    Ctheory = np.zeros((len(wk),2, 2))
+    ek = parameters.Ex-parameters.τ * 2 
+    for k in range(len(wk)):
+        θ  = np.arctan(kz[k]/parameters.kx)
+        H2x2 = np.zeros((2,2))
+        H2x2[0,0] = ek  
+        H2x2[1,1] = wk[k]
+        H2x2[1,0], H2x2[0,1] = gc * np.cos(θ)**0.5 , gc * np.cos(θ)**0.5
+        _, U = np.linalg.eigh(H2x2)
+        Ctheory[k,:,:] = U[:,:] 
+    return Ctheory
+
+
+def Psik(Psi, eikn, parameters):
+    N   =  parameters.nsites
+    Ψk = Psi * 1
+    # |en,0> ==> |ek,0>
+    Ψk[:N] = eikn @  Psi[:N]
+    return Ψk
+
+
+def PsiPolk(psik, Ctheory, parameters):
+    N   =  parameters.nsites
+    nm  =  parameters.nmodes
+ 
+    # We are going take a basis |-,k> and |+,k>
+    # Note: |-,k> will run k=0, 6000 (6001 states)
+    # But will have |+,k> will run k=0, 301
+    # Now |ek,0> =  |-,k> for |k| > 150 
+    # Final structure of the basis is :
+    # |-, -3000> |-, -2999> ... |-, 0> ... |-, 3000> 
+    # |+, -150>  |+, -149> ... |+, 0> ... |+, 149> |+, 150>
+
+    U = np.identity((len(psik)))
+    """
+    for ik in range(nm):
+        startIdx = N//2 - nm//2
+        # <- k|ek 0>
+        U[startIdx + ik, startIdx + ik] = Ctheory[ik, 0,0]
+        # <- k|g 1k>
+        U[startIdx + ik, N + ik] = Ctheory[ik, 1,0]
+        # <+ k|g 1k>
+        U[N + ik, N + ik] = Ctheory[ik, 1,1]
+        # <+ k|ek 0> 
+        U[N + ik, startIdx + ik] =  Ctheory[ik, 0,1]
+    """
+    startIdx = N//2 - nm//2
+    
+    k = np.arange(nm)
+    # <- k|ek 0>
+    U[(startIdx + k,startIdx + k)] = Ctheory[:, 0,0]
+    # <- k|g 1k>
+    U[(startIdx + k, N + k)]       = Ctheory[:, 1,0]
+    # <+ k|g 1k>
+    U[(N + k, N + k)]              = Ctheory[:, 1,1]
+    # <+ k|ek 0> 
+    U[(N + k, startIdx + k)]       = Ctheory[:, 0,1]
+
+    return U @ psik
+
+def PsiPoln(Polk, eikn, parameters):
+    N   =  parameters.nsites
+    nm  =  parameters.nmodes
+    startIdx = N//2 - nm//2
+ 
+    fullPsi = np.zeros((N*2)) + 0j 
+    fullPsi[:N] =  Polk[:N]
+    startIdx = N//2 - nm//2
+    fullPsi[N+startIdx:N+startIdx+nm] = Polk[N:]
+    eiknT = eikn.T.conjugate()
+    fullPsi[:N] = eiknT @ fullPsi[:N]
+    fullPsi[N:] = eiknT @ fullPsi[N:]
+ 
+    return fullPsi 
+
+def getPolariton(psi, Ctheory,eikn, parameters): 
+    #----------------------------------
+    psik   = Psik(psi, eikn, parameters)
+    pPsik = PsiPolk(psik, Ctheory, parameters)
+    pPsin = PsiPoln(pPsik, eikn, parameters)
+
+    return pPsin
+
+
 def pop(dat):
     ci =  dat.ci
     return np.outer(ci.conjugate(),ci)
@@ -234,13 +324,30 @@ def runTraj(parameters):
     else :
         pl = 1
     #rho_ensemble = np.zeros((NStates,NStates,NSteps//nskip + pl), dtype=complex)
-    X_ensemble   = np.zeros((parameters.nsites+1, NSteps//nskip + pl))
+    X_ensemble   = np.zeros((parameters.nsites*2, NSteps//nskip + pl))
+    wf_real = np.zeros((parameters.nsites*2, NSteps//nskip + pl))
+    wf_imag = np.zeros((parameters.nsites*2, NSteps//nskip + pl))
+
+
+    # Cthory
+    Rot = Ctheory(parameters)
+    # Eikn -----------------------------------
+    N   =  parameters.nsites
+    dL   = parameters.dL 
+    j    =  (np.arange(N))  
+    Rn   =  (1 + j) * dL 
+    kz   =  2 * np.pi * (j-N//2)/( N * dL) 
+    eikn = np.exp(-1j * np.einsum("i,j -> ij",  kz , Rn))/ N**0.5 
+    #------------------------------------------
+
     # Ensemble
     for itraj in range(NTraj): 
         # Trajectory data
         dat = Bunch(param =  parameters )
         dat.R, dat.P = parameters.initR()
         
+        
+
         # set propagator
         vv  = VelVer
 
@@ -253,8 +360,8 @@ def runTraj(parameters):
         #----------------------------
         #Ei, Ui = np.linalg.eigh(dat.Hij)
         Ei, Ui = np.linalg.eigh(dat.Hij)
-        E0 = -0.275/27.2114
-        dE =  0.05/27.2114
+        E0 = dat.param.E0 - dat.param.dE/2 # making E0 the center #-0.25/27.2114
+        dE = dat.param.dE # 0.05/27.2114
         """
         Uj = Ui[:,(Ei>E0) & (Ei< E0 + dE)] * 1
         modes = len(Uj[0,:])
@@ -275,16 +382,20 @@ def runTraj(parameters):
             if (i % nskip == 0):
                 ns = parameters.nsites
                 #ρij = pop(dat)[:ns,:ns]
-                r  =  np.diag(np.arange(ns))   
-                psi = dat.ci[:ns]
-                X_ensemble[0, iskip] +=  np.sum((dat.ci[:]*dat.ci[:].conjugate()).real) #np.sum(psi*psi.conjugate() * r**2) - np.sum(psi*psi.conjugate() * r) **2
-                X_ensemble[1:,iskip] += (psi*psi.conjugate()).real
-                #rho_ensemble[:,:,iskip] += pop(dat)
+                LP = getPolariton(dat.ci, Rot, eikn, parameters)
+                #X_ensemble[0,iskip] += np.sum(psi*psi.conjugate() * r**2) - np.sum(psi*psi.conjugate() * r) **2
+                wf_real[:,iskip] = LP.real 
+                wf_imag[:,iskip] = LP.imag 
+                # Excitonic Distribution
+                #X_ensemble[0:ns,iskip] += (psi*psi.conjugate()).real
+                # Polaritonic  Distribution
+                X_ensemble[:,iskip]  += np.abs(LP)**2
+                
                 iskip += 1
             #-------------------------------------------------------
             dat = vv(dat)
 
-    return X_ensemble
+    return X_ensemble, wf_real, wf_imag
 
 if __name__ == "__main__": 
     import spinBoson as model
